@@ -1,0 +1,299 @@
+import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { MetricsPanel } from '@/components/MetricsPanel';
+import { ThinkingPanel } from '@/components/ThinkingPanel';
+import { ToolCallsPanel } from '@/components/ToolCallsPanel';
+import { ResultsPanel } from '@/components/ResultsPanel';
+import { HistoryPanel } from '@/components/HistoryPanel';
+import { queryKimiK2 } from '@/lib/api';
+import { ThinkingStep, ToolCall, Metrics, StreamEvent } from '@/types';
+import { saveChatHistory, ChatHistoryItem } from '@/lib/historyStorage';
+import { Send, Sparkles, History, RotateCcw } from 'lucide-react';
+
+const EXAMPLE_QUERIES = [
+  'Research Notion, Obsidian, and Roam Research. Find pricing, create a comparison chart, and generate a PDF report.',
+  'Analyze the top 3 AI coding assistants. Research pricing and features, create visualizations, and export a PDF.',
+  'Research cloud storage providers. Find pricing tiers, calculate cost per GB, create a chart, and generate a PDF decision matrix.',
+];
+
+function App() {
+  const [query, setQuery] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
+  const [toolCalls, setToolCalls] = useState<ToolCall[]>([]);
+  const [resultContent, setResultContent] = useState('');
+  const [metrics, setMetrics] = useState<Metrics>({
+    thinkingTokens: 0,
+    toolCalls: 0,
+    elapsedTime: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+  });
+  const [error, setError] = useState<string | null>(null);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+
+  const resetState = () => {
+    setThinkingSteps([]);
+    setToolCalls([]);
+    setResultContent('');
+    setMetrics({
+      thinkingTokens: 0,
+      toolCalls: 0,
+      elapsedTime: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+    setError(null);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim() || isLoading) return;
+
+    // Reset state
+    setIsLoading(true);
+    resetState();
+
+    const startQuery = query;
+    let finalMetrics: Metrics = {
+      thinkingTokens: 0,
+      toolCalls: 0,
+      elapsedTime: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    };
+    let finalResult = '';
+    const finalThinkingSteps: ThinkingStep[] = [];
+    const finalToolCalls: string[] = [];
+
+    try {
+      await queryKimiK2(query, (event: StreamEvent) => {
+        switch (event.type) {
+          case 'thinking':
+            setThinkingSteps((prev) => {
+              const newStep = {
+                id: `thinking-${Date.now()}-${Math.random()}`,
+                content: event.data.content,
+                tokens: event.data.tokens,
+                timestamp: Date.now(),
+              };
+              finalThinkingSteps.push(newStep);
+              return [...prev, newStep];
+            });
+            break;
+
+          case 'tool_call':
+            setToolCalls((prev) => {
+              const existing = prev.findIndex((tc) => tc.id === event.data.id);
+              if (existing >= 0) {
+                const updated = [...prev];
+                updated[existing] = event.data;
+                return updated;
+              }
+              if (event.data.status === 'success' && !finalToolCalls.includes(event.data.name)) {
+                finalToolCalls.push(event.data.name);
+              }
+              return [...prev, event.data];
+            });
+            break;
+
+          case 'content':
+            setResultContent((prev) => {
+              finalResult = prev + event.data.content;
+              return finalResult;
+            });
+            break;
+
+          case 'metrics':
+            finalMetrics = event.data;
+            setMetrics(event.data);
+            break;
+
+          case 'error':
+            setError(event.data.message);
+            break;
+
+          case 'done':
+            setIsLoading(false);
+            
+            // Save to history
+            if (finalResult) {
+              const historyItem: ChatHistoryItem = {
+                id: `chat-${Date.now()}`,
+                timestamp: Date.now(),
+                query: startQuery,
+                result: finalResult,
+                metrics: finalMetrics,
+                thinkingSteps: finalThinkingSteps.length,
+                toolCallsExecuted: finalToolCalls,
+              };
+              saveChatHistory(historyItem);
+            }
+            break;
+        }
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An unknown error occurred');
+      setIsLoading(false);
+    }
+  };
+
+  const handleExampleClick = (example: string) => {
+    setQuery(example);
+  };
+
+  const handleClearAll = () => {
+    if (confirm('Clear all current results?')) {
+      setQuery('');
+      resetState();
+    }
+  };
+
+  const handleSelectHistory = (item: ChatHistoryItem) => {
+    setQuery(item.query);
+    setResultContent(item.result);
+    setMetrics(item.metrics);
+    // Optionally, you could restore thinking steps and tool calls if you store them
+  };
+
+  return (
+    <div className="min-h-screen bg-background">
+      <div className="container mx-auto p-6 space-y-6">
+        {/* Header */}
+        <div className="text-center space-y-2">
+          <div className="flex items-center justify-center gap-2">
+            <Sparkles className="h-8 w-8 text-purple-500" />
+            <h1 className="text-4xl font-bold">Kimi K2 Thinking Demo</h1>
+          </div>
+          <p className="text-muted-foreground">
+            Watch the AI think, use tools, and generate research reports in real-time
+          </p>
+        </div>
+
+        {/* Query Input */}
+        <Card>
+          <CardContent className="p-6">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="flex gap-2">
+                <textarea
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Enter your research query..."
+                  className="flex-1 min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-none"
+                  disabled={isLoading}
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {EXAMPLE_QUERIES.map((example, index) => (
+                  <Button
+                    key={index}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleExampleClick(example)}
+                    disabled={isLoading}
+                    className="text-xs"
+                  >
+                    Example {index + 1}
+                  </Button>
+                ))}
+              </div>
+
+              <div className="flex gap-2">
+                <Button type="submit" disabled={isLoading || !query.trim()} className="flex-1">
+                  {isLoading ? (
+                    <>
+                      <span className="animate-spin mr-2">⏳</span>
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="h-4 w-4 mr-2" />
+                      Submit Query
+                    </>
+                  )}
+                </Button>
+                
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsHistoryOpen(true)}
+                  disabled={isLoading}
+                >
+                  <History className="h-4 w-4 mr-2" />
+                  History
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleClearAll}
+                  disabled={isLoading}
+                >
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                  Clear
+                </Button>
+              </div>
+            </form>
+
+            {error && (
+              <div className="mt-4 p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 rounded-md text-sm text-red-600 dark:text-red-400">
+                <strong>Error:</strong> {error}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Metrics */}
+        <MetricsPanel metrics={metrics} />
+
+        {/* Main Content - Three Columns */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[600px]">
+          {/* Thinking Panel */}
+          <ThinkingPanel steps={thinkingSteps} />
+
+          {/* Tool Calls Panel */}
+          <ToolCallsPanel toolCalls={toolCalls} />
+
+          {/* Results Panel */}
+          <ResultsPanel content={resultContent} />
+        </div>
+
+        {/* Footer */}
+        <div className="text-center text-sm text-muted-foreground">
+          <p>
+            Powered by{' '}
+            <a
+              href="https://platform.moonshot.cn/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              Moonshot AI Kimi K2
+            </a>
+            {' '}• Web search by{' '}
+            <a
+              href="https://tavily.com/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              Tavily
+            </a>
+          </p>
+        </div>
+      </div>
+
+      {/* History Panel Modal */}
+      <HistoryPanel
+        isOpen={isHistoryOpen}
+        onClose={() => setIsHistoryOpen(false)}
+        onSelectHistory={handleSelectHistory}
+      />
+    </div>
+  );
+}
+
+export default App;
