@@ -6,6 +6,7 @@ import { ThinkingPanel } from '@/components/ThinkingPanel';
 import { ToolCallsPanel } from '@/components/ToolCallsPanel';
 import { ResultsPanel } from '@/components/ResultsPanel';
 import { HistoryPanel } from '@/components/HistoryPanel';
+import { Toast, ToastState } from '@/components/Toast';
 import { queryKimiK2 } from '@/lib/api';
 import { ThinkingStep, ToolCall, Metrics, StreamEvent } from '@/types';
 import { saveChatHistory, ChatHistoryItem } from '@/lib/historyStorage';
@@ -21,6 +22,7 @@ const EXAMPLE_QUERIES = [
 function App() {
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
   const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
   const [toolCalls, setToolCalls] = useState<ToolCall[]>([]);
   const [resultContent, setResultContent] = useState('');
@@ -33,12 +35,22 @@ function App() {
   });
   const [error, setError] = useState<string | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [toasts, setToasts] = useState<ToastState[]>([]);
   const [eventCount, setEventCount] = useState({
     thinking: 0,
     content: 0,
     toolCall: 0,
     metrics: 0,
   });
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { message, type, id }]);
+  };
+
+  const removeToast = (id: number) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  };
 
   const resetState = () => {
     setThinkingSteps([]);
@@ -59,12 +71,14 @@ function App() {
       metrics: 0,
     });
   };
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
 
     // Validate query input
     if (!query.trim()) {
-      setError('Please enter a query before submitting.');
+      const errorMsg = 'Please enter a query before submitting.';
+      setError(errorMsg);
+      showToast(errorMsg, 'error');
       return;
     }
 
@@ -72,6 +86,7 @@ function App() {
 
     setIsLoading(true);
     resetState();
+    showToast('Processing your query...', 'info');
 
     const startQuery = query;
     let finalMetrics: Metrics = {
@@ -149,6 +164,7 @@ function App() {
 
           case 'error':
             setError(event.data.message);
+            showToast(event.data.message, 'error');
             break;
 
           case 'done':
@@ -166,12 +182,15 @@ function App() {
                 toolCallsExecuted: finalToolCalls,
               };
               saveChatHistory(historyItem);
+              showToast('Query completed successfully!', 'success');
             }
             break;
         }
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An unknown error occurred');
+      const errorMsg = err instanceof Error ? err.message : 'An unknown error occurred';
+      setError(errorMsg);
+      showToast(errorMsg, 'error');
       setIsLoading(false);
     }
   };
@@ -193,7 +212,7 @@ function App() {
     setMetrics(item.metrics);
   };
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     console.log('[PDF Export] Starting export...');
     console.log('[PDF Export] Query:', query);
     console.log('[PDF Export] Result content length:', resultContent?.length);
@@ -203,10 +222,17 @@ function App() {
       const message = 'Please run a query first to generate a report before exporting.';
       console.warn('[PDF Export]', message);
       setError(message);
+      showToast(message, 'error');
       return;
     }
 
+    setIsExportingPDF(true);
+    showToast('Generating PDF report...', 'info');
+
     try {
+      // Add a small delay to show the loading state
+      await new Promise(resolve => setTimeout(resolve, 100));
+
       exportToPDF({
         query,
         thinkingSteps,
@@ -214,12 +240,17 @@ function App() {
         metrics,
       });
       console.log('[PDF Export] Export successful');
+      showToast('PDF exported successfully!', 'success');
       // Clear any previous errors
       setError(null);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to export PDF. Please try again.';
       console.error('[PDF Export] Error:', err);
-      setError(`PDF Export Error: ${errorMessage}`);
+      const fullError = `PDF Export Error: ${errorMessage}`;
+      setError(fullError);
+      showToast(fullError, 'error');
+    } finally {
+      setIsExportingPDF(false);
     }
   };
   return (
@@ -249,7 +280,14 @@ function App() {
                 <textarea
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Enter your research query..."
+                  onKeyDown={(e) => {
+                    // Ctrl+Enter or Cmd+Enter to submit
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSubmit();
+                    }
+                  }}
+                  placeholder="Enter your research query... (Ctrl+Enter to submit)"
                   className="flex-1 min-h-[100px] w-full rounded-lg border border-slate-600 bg-slate-900/50 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50 resize-none backdrop-blur-sm"
                   disabled={isLoading}
                 />
@@ -294,12 +332,21 @@ function App() {
                   type="button"
                   variant="outline"
                   onClick={handleExportPDF}
-                  disabled={isLoading || !resultContent}
-                  className="border-slate-600 bg-slate-800/50 text-slate-300 hover:bg-slate-700 hover:text-slate-100 hover:border-green-500"
+                  disabled={isLoading || !resultContent || isExportingPDF}
+                  className="border-slate-600 bg-slate-800/50 text-slate-300 hover:bg-slate-700 hover:text-slate-100 hover:border-green-500 transition-all"
                   title="Export results to PDF"
                 >
-                  <FileDown className="h-4 w-4 mr-2" />
-                  Export PDF
+                  {isExportingPDF ? (
+                    <>
+                      <span className="animate-spin mr-2">⏳</span>
+                      Exporting...
+                    </>
+                  ) : (
+                    <>
+                      <FileDown className="h-4 w-4 mr-2" />
+                      Export PDF
+                    </>
+                  )}
                 </Button>
 
                 <Button
@@ -390,6 +437,16 @@ function App() {
         onClose={() => setIsHistoryOpen(false)}
         onSelectHistory={handleSelectHistory}
       />
+
+      {/* Toast Notifications */}
+      {toasts.map((toast) => (
+        <Toast
+          key={toast.id}
+          message={toast.message}
+          type={toast.type}
+          onClose={() => removeToast(toast.id)}
+        />
+      ))}
     </div>
   );
 }
