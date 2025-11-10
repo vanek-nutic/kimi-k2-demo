@@ -9,12 +9,17 @@ function countTokens(text: string): number {
 
 export async function queryKimiK2(
   query: string,
-  onEvent: (event: StreamEvent) => void
+  onEvent: (event: StreamEvent) => void,
+  timeout: number = 60000 // 60 second default timeout
 ): Promise<void> {
   console.log('[API] Starting queryKimiK2 with query:', query);
 
   if (!MOONSHOT_API_KEY) {
-    throw new Error('Moonshot API key not configured');
+    throw new Error('Moonshot API key not configured. Please add your API key to the .env file.');
+  }
+
+  if (!MOONSHOT_API_KEY.startsWith('sk-')) {
+    throw new Error('Invalid API key format. Moonshot API keys should start with "sk-". Please check your .env file.');
   }
 
   const messages = [
@@ -33,21 +38,39 @@ export async function queryKimiK2(
 
   try {
     console.log('[API] Making fetch request to:', MOONSHOT_API_URL);
-    const response = await fetch(MOONSHOT_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${MOONSHOT_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'kimi-k2-turbo-preview',
-        messages: messages,
-        stream: true,
-        temperature: 1,
-        top_p: 0.8,
-        reasoning_content: true,
-      }),
-    });
+
+    // Create abort controller for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, timeout);
+
+    let response: Response;
+    try {
+      response = await fetch(MOONSHOT_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${MOONSHOT_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'kimi-k2-turbo-preview',
+          messages: messages,
+          stream: true,
+          temperature: 1,
+          top_p: 0.8,
+          reasoning_content: true,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        throw new Error(`Request timed out after ${timeout / 1000} seconds. Please try again.`);
+      }
+      throw fetchError;
+    }
 
     console.log('[API] Fetch response received. Status:', response.status, 'OK:', response.ok);
 
@@ -59,6 +82,18 @@ export async function queryKimiK2(
       } catch (e) {
         // Use statusText if response is not JSON
       }
+
+      // Provide helpful error messages based on status code
+      if (response.status === 401) {
+        throw new Error('Authentication failed. Please check your Moonshot API key in the .env file.');
+      } else if (response.status === 403) {
+        throw new Error('Access forbidden. Your API key may not have permission to use this model.');
+      } else if (response.status === 429) {
+        throw new Error('Rate limit exceeded. Please wait a moment and try again.');
+      } else if (response.status >= 500) {
+        throw new Error('Moonshot API server error. Please try again later.');
+      }
+
       throw new Error(`API request failed: ${errorMessage}`);
     }
 

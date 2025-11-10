@@ -9,7 +9,7 @@ import {
   exportChatHistory,
   ChatHistoryItem 
 } from '@/lib/historyStorage';
-import { formatTime } from '@/lib/utils';
+import { formatTime, formatRelativeTime } from '@/lib/utils';
 
 interface HistoryPanelProps {
   onSelectHistory: (item: ChatHistoryItem) => void;
@@ -111,8 +111,8 @@ export function HistoryPanel({ onSelectHistory, isOpen, onClose }: HistoryPanelP
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
                         <Clock className="h-3 w-3 text-muted-foreground" />
-                        <span className="text-xs text-muted-foreground">
-                          {new Date(item.timestamp).toLocaleString()}
+                        <span className="text-xs text-muted-foreground" title={new Date(item.timestamp).toLocaleString()}>
+                          {formatRelativeTime(item.timestamp)}
                         </span>
                       </div>
                       <p className="text-sm font-medium line-clamp-2">
